@@ -1,0 +1,3 @@
+/home/davidcalderon03/Documents/classes/6422/project/CMakeFiles/project.dir
+/home/davidcalderon03/Documents/classes/6422/project/CMakeFiles/edit_cache.dir
+/home/davidcalderon03/Documents/classes/6422/project/CMakeFiles/rebuild_cache.dir
