@@ -529,8 +529,9 @@ public:
 };
 
 struct Data {
-    int size = 1024;
-    int data[1024];
+    int size = 1024 - 2;
+    int page_id;
+    int data[1024 - 2];
 };
 
 class Compressor {
@@ -545,7 +546,8 @@ class Compressor {
         Data* createData() {
             SlottedPage* page = &buffer_manager.fix_page(next_page_id++);
             Data* data = reinterpret_cast<Data*>(page->page_data.get());    
-            data->size = 1024;
+            data->size = (PAGE_SIZE - 2 * sizeof(int)) / 4;
+            data->page_id = next_page_id - 1;
             return data;
         }
 
@@ -554,8 +556,53 @@ class Compressor {
             return reinterpret_cast<Data*>(page->page_data.get());    
         }
 
-        void printID() {
-            std::cout << next_page_id << std::endl;
+        cv::Mat* createMat() {
+            SlottedPage* page = &buffer_manager.fix_page(next_page_id++);
+            return reinterpret_cast<cv::Mat*>(page->page_data.get());
+        }
+
+        cv::Mat* getMat(int id) {
+            SlottedPage* page = &buffer_manager.fix_page(id);
+            return reinterpret_cast<cv::Mat*>(page->page_data.get());    
+        }
+
+        int createIntRLE(int* src, int* dst, int numInts) {
+            int i = 0;
+            int newSize = 0;
+            int current, currentCount;
+            while(i < numInts) {
+                current = *src;
+                currentCount = 0;
+                while (*src == current && i < numInts) {
+                    ++src;
+                    ++currentCount;
+                    ++i;
+                }
+                *dst = current;
+                *(dst + 1) = currentCount;
+                newSize += 2;
+                dst += 2;
+            }
+            return newSize;
+        }
+
+        int decodeRLE(int* src, int* dst, int numInts) {
+            int i = 0;
+            int newSize = 0;
+            int current, currentCount;
+            while(i < numInts) {
+                current = *src;
+                currentCount = *(src + 1);
+                while (currentCount > 0) {
+                    *dst = current;
+                    dst++;
+                    --currentCount;
+                    ++newSize;
+                }
+                src += 2;
+                i += 2;
+            }
+            return newSize;
         }
 
 
@@ -564,26 +611,54 @@ class Compressor {
 int main(int argc, char* argv[]) {
     UNUSED(argc);
     UNUSED(argv);
-
-    // Test the buffer manager
     BufferManager buffer_manager;
     Compressor compressor(buffer_manager);
 
+    // Test the buffer manager
     Data* data = compressor.createData();
-    for (int i = 0; i < data->size; ++i) {
-        data->data[i] = i;
+    // for (int i = 0; i < data->size; ++i) {
+    //     data->data[i] = i;
+    // }
+    // for (int i = 0; i < data->size; ++i) {
+    //     std::cout << data->data[i] << std::endl;
+    // }
+
+
+    cv::Mat* image = compressor.createMat();    
+    *image = cv::imread("./../images.jpeg");
+    // for (int i = 0; i < sizeof(*image / 4); ++i) {
+    //     std::cout << *((int*)(image) + i) << std::endl;
+    // }
+    cv::Mat* image2 = compressor.getMat(compressor.next_page_id - 1);
+    int buffer [sizeof(*image2 + 1)];
+
+    int size = compressor.createIntRLE((int*)image2, buffer, sizeof(*image2) / 4);
+    for (int* i = (int*)image2; i < ((int*)image2) + (sizeof(*image2) / 4); ++i) {
+        std::cout << *i << std::endl;
     }
-    for (int i = 0; i < data->size; ++i) {
-        std::cout << data->data[i] << std::endl;
+    std::cout << "-------------------------------" << std::endl;
+    for (int i = 0; i < size; ++i) {
+        std::cout << buffer[i] << std::endl;
     }
 
-    // Test OpenCV
-    cv::Mat image = cv::imread("./images.jpeg");
-    std::cout << "Rows: " << image.rows << std::endl;
-    std::cout << "Cols: " << image.cols << std::endl;
 
-    size_t imageSizeInBytes = image.total() * image.elemSize();
-    std::cout << "Image size: " << imageSizeInBytes << " bytes" << std::endl;
+    int size2 = compressor.decodeRLE(buffer, (int*)image2, size);
+    std::cout << "-------------------------------" << std::endl;
+    for (int* i = (int*)image2; i < ((int*)image2) + (sizeof(*image2) / 4); ++i) {
+        std::cout << *i << std::endl;
+    }
+
+    std::cout << "Size Initial: " << sizeof(*image2) << std::endl;
+    std::cout << "Size Compressed: " << size * 4 << std::endl;
+    std::cout << "Size Not Compressed: " << size2 * 4 << std::endl;
+    
+
+    std::cout << "Rows: " << image2->rows << std::endl;
+    std::cout << "Cols: " << image2->cols << std::endl;
+    std::cout << "Size: " << sizeof(image) << std::endl;
+    cv::namedWindow("Display Image", cv::WINDOW_AUTOSIZE); 
+    cv::imshow("Display Image", *image2); 
+    cv::waitKey(0);
     
     return 0;
 }
