@@ -603,6 +603,23 @@ public:
     return newSize;
   }
 
+  std::unordered_map<std::string, int> encodeLZW(char *src, char *dst, int size,
+                                                 int *outputSize) {
+    int count = 0;
+    std::string current = "";
+    std::unordered_map<std::string, int> result;
+    while (count < size) {
+      if (result.find(current + *(dst + count)) != result.end()) {
+        current += *(dst + count);
+      } else {
+        result[current + *(dst + count)] = 1;
+        current = *(dst + count);
+      }
+      count++;
+    }
+    return result;
+  }
+
   struct Node {
     Node *left;
     Node *right;
@@ -618,7 +635,16 @@ public:
     }
   };
 
-  int encodeHuffman(char *src, char *dst, int numChars) {
+  void TreeDestructor(Node *node) {
+    if (!node->isLeaf) {
+      TreeDestructor(node->left);
+      TreeDestructor(node->right);
+    }
+    delete node;
+  }
+
+  std::unordered_map<char, std::string>
+  encodeHuffman(char *src, char *dst, int numChars, int *numBits) {
     int size = 0;
 
     // Construct a frequency mapping.
@@ -634,31 +660,93 @@ public:
     std::priority_queue<value, std::vector<value>, decltype(comp)> pq(comp);
     for (const auto &[k, v] : mapping) {
       pq.push(std::make_pair(k, v));
+      std::cout << k << " " << v << std::endl;
     }
     std::vector<Node> nodes;
-    Node firstLeft(nullptr, nullptr, pq.top().first, pq.top().second, true);
+    Node *firstLeft =
+        new Node(nullptr, nullptr, pq.top().first, pq.top().second, true);
     pq.pop();
-    Node firstRight(nullptr, nullptr, pq.top().first, pq.top().second, true);
+    Node *firstRight =
+        new Node(nullptr, nullptr, pq.top().first, pq.top().second, true);
     pq.pop();
-    Node currentFakeNode(&firstLeft, &firstRight, 'z',
-                         firstLeft.frequency + firstRight.frequency, false);
-    Node root = currentFakeNode;
+    Node *currentFakeNode =
+        new Node(firstLeft, firstRight, 'z',
+                 firstLeft->frequency + firstRight->frequency, false);
+    Node *root = currentFakeNode;
     int height = 1;
     while (pq.size()) {
-      Node newLeaf(nullptr, nullptr, pq.top().first, pq.top().second, true);
+      Node *newLeaf =
+          new Node(nullptr, nullptr, pq.top().first, pq.top().second, true);
       pq.pop();
-      Node newFakeNode(
-          currentFakeNode.frequency < newLeaf.frequency ? &currentFakeNode
-                                                        : &newLeaf,
-          currentFakeNode.frequency < newLeaf.frequency ? &newLeaf
-                                                        : &currentFakeNode,
-          'z', currentFakeNode.frequency + newLeaf.frequency, false);
-      root = currentFakeNode;
+      Node *newFakeNode = new Node(
+          currentFakeNode->frequency < newLeaf->frequency ? currentFakeNode
+                                                          : newLeaf,
+          currentFakeNode->frequency < newLeaf->frequency ? newLeaf
+                                                          : currentFakeNode,
+          'z', currentFakeNode->frequency + newLeaf->frequency, false);
+      root = newFakeNode;
       currentFakeNode = newFakeNode;
       height++;
     }
 
-    return size;
+    std::unordered_map<char, std::string> encodings;
+    Node *current = root;
+    std::string currentEncoding = "";
+    while (true) {
+      if (current->left->isLeaf && current->right->isLeaf) {
+        encodings[current->left->value] = currentEncoding + "0";
+        encodings[current->right->value] = currentEncoding + "1";
+        std::cout << "Bottom node with value " << current->left->value
+                  << " and frequency: " << current->left->frequency
+                  << std::endl;
+        std::cout << "Bottom node with value " << current->right->value
+                  << " and frequency: " << current->right->frequency
+                  << std::endl;
+        break;
+      }
+      if (current->left->isLeaf) {
+        encodings[current->left->value] = currentEncoding + "0";
+        current = current->right;
+        currentEncoding += "1";
+        std::cout << "Leaf node with value " << current->left->value
+                  << " and frequency: " << current->left->frequency
+                  << std::endl;
+      } else if (current->right->isLeaf) {
+        encodings[current->right->value] = currentEncoding + "1";
+        current = current->left;
+        currentEncoding += "0";
+        std::cout << "Leaf node with value " << current->right->value
+                  << " and frequency: " << current->right->frequency
+                  << std::endl;
+      } else {
+        ASSERT_WITH_MESSAGE(false,
+                            "Both children of a node are not leaves. Try "
+                            "checking if the tree was generated correctly");
+      }
+    }
+    ASSERT_WITH_MESSAGE(mapping.size() == encodings.size(),
+                        "Mismatched encoding mapping size. Try checking if the "
+                        "tree was generated correctly");
+
+    int currentByte = 0;
+    int currentBit = 0;
+    for (int i = 0; i < numChars; ++i) {
+      std::string currentEncoding = encodings[*(src + i)];
+      for (int j = 0; j < currentEncoding.size(); ++j) {
+        if (currentBit == 0) {
+          *(dst + currentByte) = 0;
+        }
+        *(dst + currentByte) |= (1 << currentBit);
+        currentBit++;
+        *numBits = *numBits + 1;
+        if (currentBit == 8) {
+          currentBit = 0;
+          currentByte++;
+        }
+      }
+    }
+    TreeDestructor(root);
+    return encodings;
   }
 };
 
@@ -685,31 +773,37 @@ int main(int argc, char *argv[]) {
   cv::Mat *image2 = compressor.getMat(compressor.next_page_id - 1);
   int buffer[sizeof(*image2 + 1)];
 
+  char *buffer2 = "Helllllo world!";
+  std::cout << "the letter is: " << *buffer2 << std::endl;
+  int size3 = 0;
+  std::unordered_map<char, std::string> encodings =
+      compressor.encodeHuffman(buffer2, (char *)buffer, 15, &size3);
+
   int size =
       compressor.createIntRLE((int *)image2, buffer, sizeof(*image2) / 4);
-  for (int *i = (int *)image2; i < ((int *)image2) + (sizeof(*image2) / 4);
-       ++i) {
-    std::cout << *i << std::endl;
-  }
-  std::cout << "-------------------------------" << std::endl;
-  for (int i = 0; i < size; ++i) {
-    std::cout << buffer[i] << std::endl;
-  }
-
+  // for (int *i = (int *)image2; i < ((int *)image2) + (sizeof(*image2) / 4);
+  //      ++i) {
+  //   std::cout << *i << std::endl;
+  // }
+  // std::cout << "-------------------------------" << std::endl;
+  // for (int i = 0; i < size; ++i) {
+  //   std::cout << buffer[i] << std::endl;
+  // }
+  //
   int size2 = compressor.decodeRLE(buffer, (int *)image2, size);
-  std::cout << "-------------------------------" << std::endl;
-  for (int *i = (int *)image2; i < ((int *)image2) + (sizeof(*image2) / 4);
-       ++i) {
-    std::cout << *i << std::endl;
-  }
+  // std::cout << "-------------------------------" << std::endl;
+  // for (int *i = (int *)image2; i < ((int *)image2) + (sizeof(*image2) / 4);
+  //      ++i) {
+  //   std::cout << *i << std::endl;
+  // }
 
-  std::cout << "Size Initial: " << sizeof(*image2) << std::endl;
-  std::cout << "Size Compressed: " << size * 4 << std::endl;
-  std::cout << "Size Not Compressed: " << size2 * 4 << std::endl;
-
-  std::cout << "Rows: " << image2->rows << std::endl;
-  std::cout << "Cols: " << image2->cols << std::endl;
-  std::cout << "Size: " << sizeof(*image2) << std::endl;
+  // std::cout << "Size Initial: " << sizeof(*image2) << std::endl;
+  // std::cout << "Size Compressed: " << size * 4 << std::endl;
+  // std::cout << "Size Not Compressed: " << size2 * 4 << std::endl;
+  //
+  // std::cout << "Rows: " << image2->rows << std::endl;
+  // std::cout << "Cols: " << image2->cols << std::endl;
+  // std::cout << "Size: " << sizeof(*image2) << std::endl;
   cv::namedWindow("Display Image", cv::WINDOW_AUTOSIZE);
   cv::imshow("Display Image", *image2);
   cv::waitKey(0);
