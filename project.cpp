@@ -564,59 +564,83 @@ public:
     return reinterpret_cast<cv::Mat *>(page->page_data.get());
   }
 
-  int createIntRLE(int *src, int *dst, int numInts) {
+  std::string encodeRLE(std::string input) {
     int i = 0;
     int newSize = 0;
-    int current, currentCount;
-    while (i < numInts) {
-      current = *src;
-      currentCount = 0;
-      while (*src == current && i < numInts) {
-        ++src;
+    char current, currentCount;
+    std::string result;
+    while (i < input.length()) {
+      current = input[i];
+      currentCount = (char)0;
+      while (input[i] == current && i < input.length()) {
         ++currentCount;
         ++i;
       }
-      *dst = current;
-      *(dst + 1) = currentCount;
-      newSize += 2;
-      dst += 2;
+      result += current;
+      result += currentCount;
     }
-    return newSize;
+    return result;
   }
 
-  int decodeRLE(int *src, int *dst, int numInts) {
+  std::string decodeRLE(std::string input) {
     int i = 0;
-    int newSize = 0;
-    int current, currentCount;
-    while (i < numInts) {
-      current = *src;
-      currentCount = *(src + 1);
+    char current;
+    int currentCount;
+    std::string result;
+    while (i < input.length()) {
+      current = input[i++];
+      currentCount = (int)input[i++];
       while (currentCount > 0) {
-        *dst = current;
-        dst++;
+        result += current;
         --currentCount;
-        ++newSize;
       }
-      src += 2;
-      i += 2;
     }
-    return newSize;
+    return result;
   }
 
-  std::unordered_map<std::string, int> encodeLZW(char *src, char *dst, int size,
-                                                 int *outputSize) {
-    int count = 0;
-    std::string current = "";
-    std::unordered_map<std::string, int> result;
-    while (count < size) {
-      if (result.find(current + *(dst + count)) != result.end()) {
-        current += *(dst + count);
-      } else {
-        result[current + *(dst + count)] = 1;
-        current = *(dst + count);
-      }
-      count++;
+  std::vector<int> encodeLZW(std::string src) {
+    std::vector<int> result;
+    std::unordered_map<std::string, int> mapping;
+    int mapSize = 256;
+    for (int i = 0; i < mapSize; ++i) {
+      mapping[std::string(1, (char)i)] = i;
     }
+    std::string found = "";
+    for (int i = 0; i < src.length(); ++i) {
+      std::string added = found + std::string(1, src[i]);
+      if (mapping.find(added) != mapping.end()) {
+        found = added;
+      } else {
+        result.push_back(mapping[found]);
+        mapping[added] = mapSize++;
+        found = std::string(1, src[i]);
+      }
+    }
+    if (!found.empty()) {
+      result.push_back(mapping[found]);
+    }
+    return result;
+  }
+
+  std::string decodeLZW(std::vector<int> encoding) {
+    int dictSize = 256;
+    std::unordered_map<int, std::string> mapping;
+    for (int i = 0; i < dictSize; ++i) {
+      mapping[i] = std::string(1, (char)i);
+    }
+    std::string characters = std::string(1, (char)encoding[0]);
+    encoding.erase(encoding.begin());
+
+    std::string result = characters;
+    for (int code : encoding) {
+      std::string entry = mapping.find(code) != mapping.end()
+                              ? mapping[code]
+                              : characters + characters[0];
+      result += entry;
+      mapping[dictSize++] = characters + entry[0];
+      characters = entry;
+    }
+
     return result;
   }
 
@@ -643,14 +667,15 @@ public:
     delete node;
   }
 
-  std::unordered_map<char, std::string>
-  encodeHuffman(char *src, char *dst, int numChars, int *numBits) {
+  std::string encodeHuffman(std::string src,
+                            std::unordered_map<std::string, char> &patterns,
+                            int *numBits) {
     int size = 0;
 
     // Construct a frequency mapping.
     std::unordered_map<char, int> mapping;
-    for (int i = 0; i < numChars; ++i) {
-      mapping[*(src + i)]++;
+    for (int i = 0; i < src.length(); ++i) {
+      mapping[src[i]]++;
     }
 
     // Create priority queue to sort the elements
@@ -660,7 +685,7 @@ public:
     std::priority_queue<value, std::vector<value>, decltype(comp)> pq(comp);
     for (const auto &[k, v] : mapping) {
       pq.push(std::make_pair(k, v));
-      std::cout << k << " " << v << std::endl;
+      // std::cout << k << " " << v << std::endl;
     }
     std::vector<Node> nodes;
     Node *firstLeft =
@@ -673,8 +698,10 @@ public:
         new Node(firstLeft, firstRight, 'z',
                  firstLeft->frequency + firstRight->frequency, false);
     Node *root = currentFakeNode;
-    int height = 1;
+    int height = 2;
     while (pq.size()) {
+      // std::cout << "Next is: " << pq.top().first << " " << pq.top().second
+      //           << std::endl;
       Node *newLeaf =
           new Node(nullptr, nullptr, pq.top().first, pq.top().second, true);
       pq.pop();
@@ -696,28 +723,16 @@ public:
       if (current->left->isLeaf && current->right->isLeaf) {
         encodings[current->left->value] = currentEncoding + "0";
         encodings[current->right->value] = currentEncoding + "1";
-        std::cout << "Bottom node with value " << current->left->value
-                  << " and frequency: " << current->left->frequency
-                  << std::endl;
-        std::cout << "Bottom node with value " << current->right->value
-                  << " and frequency: " << current->right->frequency
-                  << std::endl;
         break;
       }
       if (current->left->isLeaf) {
         encodings[current->left->value] = currentEncoding + "0";
         current = current->right;
         currentEncoding += "1";
-        std::cout << "Leaf node with value " << current->left->value
-                  << " and frequency: " << current->left->frequency
-                  << std::endl;
       } else if (current->right->isLeaf) {
         encodings[current->right->value] = currentEncoding + "1";
         current = current->left;
         currentEncoding += "0";
-        std::cout << "Leaf node with value " << current->right->value
-                  << " and frequency: " << current->right->frequency
-                  << std::endl;
       } else {
         ASSERT_WITH_MESSAGE(false,
                             "Both children of a node are not leaves. Try "
@@ -727,16 +742,18 @@ public:
     ASSERT_WITH_MESSAGE(mapping.size() == encodings.size(),
                         "Mismatched encoding mapping size. Try checking if the "
                         "tree was generated correctly");
-
     int currentByte = 0;
     int currentBit = 0;
-    for (int i = 0; i < numChars; ++i) {
-      std::string currentEncoding = encodings[*(src + i)];
+    std::string result = "";
+    for (int i = 0; i < src.length(); ++i) {
+      std::string currentEncoding = encodings[src[i]];
       for (int j = 0; j < currentEncoding.size(); ++j) {
         if (currentBit == 0) {
-          *(dst + currentByte) = 0;
+          result += (char)0;
         }
-        *(dst + currentByte) |= (1 << currentBit);
+        if (currentEncoding[j] == '1') {
+          result[currentByte] = result[currentByte] | (1 << currentBit);
+        }
         currentBit++;
         *numBits = *numBits + 1;
         if (currentBit == 8) {
@@ -746,9 +763,207 @@ public:
       }
     }
     TreeDestructor(root);
-    return encodings;
+    for (const auto &[k, v] : encodings) {
+      patterns[v] = k;
+    }
+    return result;
+  }
+
+  std::string decodeHuffman(std::unordered_map<std::string, char> encodings,
+                            std::string src, int numBitsIn, int *numBytesOut) {
+    int bitCount = 0;
+    std::string current_pattern = "";
+    std::string result = "";
+    while (bitCount < numBitsIn) {
+      char currentCharacter = src[bitCount / 8];
+      if (((currentCharacter >> (bitCount % 8)) & 1) == 1) {
+        current_pattern += "1";
+      } else {
+        current_pattern += "0";
+      }
+      if (encodings.find(current_pattern) != encodings.end()) {
+        result += encodings[current_pattern];
+        current_pattern = "";
+        *numBytesOut = *numBytesOut + 1;
+      }
+      bitCount++;
+    }
+    return result;
   }
 };
+
+void testRLE(Compressor compressor) {
+  // Test basic RLE
+  std::string input =
+      "aaaaaaabbbbbbbcccccccdddddddeeeeeeefffffffggggggghhhhhhhhhhhhh";
+  std::string encoded = compressor.encodeRLE(input);
+  std::string decoded = compressor.decodeRLE(encoded);
+  std::cout << "[1] RLE Test: "
+            << ((input.compare(decoded) == 0) ? "Passed" : "Failed")
+            << std::endl;
+}
+
+void testHuffman(Compressor compressor) {
+  std::string input = "abcdefghijklmnopqrstuvwxyz";
+  int numBits = 0;
+  std::unordered_map<std::string, char> encodings;
+  std::string encoded = compressor.encodeHuffman(input, encodings, &numBits);
+  int numBytesOut = 0;
+  std::string decoded =
+      compressor.decodeHuffman(encodings, encoded, numBits, &numBytesOut);
+  std::cout << "[2] Huffman Test: "
+            << ((input.compare(decoded) == 0) ? "Passed" : "Failed")
+            << std::endl;
+}
+
+void testLZW(Compressor compressor) {
+  std::string input = "This is the piece of text i want to use";
+  int size = 0;
+  std::vector<int> encoded = compressor.encodeLZW(input);
+  std::string decoded = compressor.decodeLZW(encoded);
+  std::cout << "[3] LZW Test: "
+            << ((input.compare(decoded) == 0) ? "Passed" : "Failed")
+            << std::endl;
+}
+
+std::vector<char> readCSV() {
+  std::ifstream file("csvtest.csv");
+  if (!file.is_open()) {
+    std::cerr << "Error opening file!" << std::endl;
+    return {};
+  }
+
+  file.seekg(0, std::ios::end);
+  std::streampos fileSize = file.tellg();
+  file.seekg(0, std::ios::beg);
+
+  std::vector<char> buffer(fileSize);
+  file.read(buffer.data(), fileSize);
+
+  std::string line;
+  for (char c : buffer) {
+    if (c == '\n') {
+      // std::cout << line << std::endl;
+      line.clear();
+    } else {
+      line += c;
+    }
+  }
+  //
+  // if (!line.empty()) {
+  //   std::cout << line << std::endl;
+  // }
+
+  return buffer;
+}
+
+void compareCSV(Compressor compressor) {
+  // Data Setup
+  std::vector<char> data = readCSV();
+  std::string asString = std::string(data.begin(), data.end());
+  int size = 0, size2 = 0;
+
+  // Test CSV -> RLE
+  std::string rleEncoding = compressor.encodeRLE(asString);
+  std::string rleDecoding = compressor.decodeRLE(rleEncoding);
+  std::cout << "CSV       | RLE           | " << data.size() << "      | "
+            << rleEncoding.length() << "       | " << rleDecoding.length()
+            << std::endl;
+
+  // Test CSV -> Huffman
+  std::unordered_map<std::string, char> mapping;
+  std::string huffmanEncoding =
+      compressor.encodeHuffman(asString, mapping, &size);
+  std::string huffmanDecoding =
+      compressor.decodeHuffman(mapping, huffmanEncoding, size, &size2);
+  std::cout << "CSV       | Huffman       | " << data.size() << "      | "
+            << huffmanEncoding.length() << "       | "
+            << huffmanDecoding.length() << std::endl;
+
+  // Test CSV -> LZW
+  std::vector<int> lzwEncoding = compressor.encodeLZW(asString);
+  std::string lzwDecoding = compressor.decodeLZW(lzwEncoding);
+  std::cout << "CSV       | LZW           | " << data.size() << "      |  "
+            << lzwEncoding.size() * 4 << "       | " << lzwDecoding.length()
+            << std::endl;
+}
+
+void compareJPG(Compressor compressor) {
+  // Setup Image Processing
+  std::ifstream file("images.jpeg", std::ios::binary);
+  if (file.is_open()) {
+    int size = 0, size2 = 0;
+    file.seekg(0, std::ios::end);
+    int fileSize = file.tellg();
+    file.seekg(0, std::ios::beg);
+    char *buffer = new char[fileSize];
+    file.read(buffer, fileSize);
+    file.close();
+    std::string asString = std::string(buffer, fileSize);
+    std::string rleEncoding = compressor.encodeRLE(asString);
+    std::string rleDecoding = compressor.decodeRLE(rleEncoding);
+    std::cout << "JPG       | RLE           | " << asString.size()
+              << "         | " << rleEncoding.length() << "          | "
+              << rleDecoding.length() << std::endl;
+
+    // Test CSV -> Huffman
+    std::unordered_map<std::string, char> mapping;
+    std::string huffmanEncoding =
+        compressor.encodeHuffman(asString, mapping, &size);
+    std::string huffmanDecoding =
+        compressor.decodeHuffman(mapping, huffmanEncoding, size, &size2);
+    std::cout << "JPG       | Huffman       | " << asString.size()
+              << "         | " << huffmanEncoding.length() << "         | "
+              << huffmanDecoding.length() << std::endl;
+
+    // Test CSV -> LZW
+    std::vector<int> lzwEncoding = compressor.encodeLZW(asString);
+    std::string lzwDecoding = compressor.decodeLZW(lzwEncoding);
+    std::cout << "JPG       | LZW           | " << asString.size()
+              << "         | " << lzwEncoding.size() * 4 << "          | "
+              << lzwDecoding.length() << std::endl;
+  }
+}
+
+void compareTXT(Compressor compressor) {
+  std::ifstream file("animalfarm.txt"); // Replace with your file name
+
+  if (!file.is_open()) {
+    std::cerr << "Error opening file!" << std::endl;
+    exit(1);
+  }
+  std::vector<char> charArray;
+  char ch;
+  while (file.get(ch)) {
+    charArray.push_back(ch);
+  }
+  charArray.push_back('\0');
+  int size = 0, size2 = 0;
+  std::string asString = std::string(charArray.begin(), charArray.end());
+
+  std::string rleEncoding = compressor.encodeRLE(asString);
+  std::string rleDecoding = compressor.decodeRLE(rleEncoding);
+  std::cout << "TXT       | RLE           | " << asString.size() << "       | "
+            << rleEncoding.length() << "         | " << rleDecoding.length()
+            << std::endl;
+
+  // Test CSV -> Huffman
+  std::unordered_map<std::string, char> mapping;
+  std::string huffmanEncoding =
+      compressor.encodeHuffman(asString, mapping, &size);
+  std::string huffmanDecoding =
+      compressor.decodeHuffman(mapping, huffmanEncoding, size, &size2);
+  std::cout << "TXT       | Huffman       | " << asString.size() << "       | "
+            << huffmanEncoding.length() << "         | "
+            << huffmanDecoding.length() << std::endl;
+
+  // Test CSV -> LZW
+  std::vector<int> lzwEncoding = compressor.encodeLZW(asString);
+  std::string lzwDecoding = compressor.decodeLZW(lzwEncoding);
+  std::cout << "TXT       | LZW           | " << asString.size() << "       | "
+            << lzwEncoding.size() * 4 << "         | " << lzwDecoding.length()
+            << std::endl;
+}
 
 int main(int argc, char *argv[]) {
   UNUSED(argc);
@@ -756,47 +971,38 @@ int main(int argc, char *argv[]) {
   BufferManager buffer_manager;
   Compressor compressor(buffer_manager);
 
+  testRLE(compressor);
+  testHuffman(compressor);
+  testLZW(compressor);
+
+  std::cout << "Data Type | Encoding Type | Initial Size | After Encoding | "
+               "After Decoding\n--------------------------------------------"
+               "-------------------------------\n";
+  compareCSV(compressor);
+  compareJPG(compressor);
+  compareTXT(compressor);
+
+  return 0;
+}
+
+void unused() {
   // Test the buffer manager
-  Data *data = compressor.createData();
-  // for (int i = 0; i < data->size; ++i) {
+  // Data *data = compressor.createData();
+  // // for (int i = 0; i < data->size; ++i) {
   //     data->data[i] = i;
   // }
   // for (int i = 0; i < data->size; ++i) {
   //     std::cout << data->data[i] << std::endl;
   // }
+  // cv::waitKey(0);
 
-  cv::Mat *image = compressor.createMat();
-  *image = cv::imread("./../images.jpeg");
+  // cv::Mat *image = compressor.createMat();
+  // *image = cv::imread("./../images.jpeg");
   // for (int i = 0; i < sizeof(*image / 4); ++i) {
   //     std::cout << *((int*)(image) + i) << std::endl;
   // }
-  cv::Mat *image2 = compressor.getMat(compressor.next_page_id - 1);
-  int buffer[sizeof(*image2 + 1)];
-
-  char *buffer2 = "Helllllo world!";
-  std::cout << "the letter is: " << *buffer2 << std::endl;
-  int size3 = 0;
-  std::unordered_map<char, std::string> encodings =
-      compressor.encodeHuffman(buffer2, (char *)buffer, 15, &size3);
-
-  int size =
-      compressor.createIntRLE((int *)image2, buffer, sizeof(*image2) / 4);
-  // for (int *i = (int *)image2; i < ((int *)image2) + (sizeof(*image2) / 4);
-  //      ++i) {
-  //   std::cout << *i << std::endl;
-  // }
-  // std::cout << "-------------------------------" << std::endl;
-  // for (int i = 0; i < size; ++i) {
-  //   std::cout << buffer[i] << std::endl;
-  // }
+  // cv::Mat *image2 = compressor.getMat(compressor.next_page_id - 1);
   //
-  int size2 = compressor.decodeRLE(buffer, (int *)image2, size);
-  // std::cout << "-------------------------------" << std::endl;
-  // for (int *i = (int *)image2; i < ((int *)image2) + (sizeof(*image2) / 4);
-  //      ++i) {
-  //   std::cout << *i << std::endl;
-  // }
-
   // std::cout << "Size Initial: " << sizeof(*image2) << std::endl;
   // std::cout << "Size Compressed: " << size * 4 << std::endl;
   // std::cout << "Size Not Compressed: " << size2 * 4 << std::endl;
@@ -804,9 +1010,6 @@ int main(int argc, char *argv[]) {
   // std::cout << "Rows: " << image2->rows << std::endl;
   // std::cout << "Cols: " << image2->cols << std::endl;
   // std::cout << "Size: " << sizeof(*image2) << std::endl;
-  cv::namedWindow("Display Image", cv::WINDOW_AUTOSIZE);
-  cv::imshow("Display Image", *image2);
-  cv::waitKey(0);
-
-  return 0;
+  // cv::namedWindow("Display Image", cv::WINDOW_AUTOSIZE);
+  // cv::imshow("Display Image", *image2);
 }
